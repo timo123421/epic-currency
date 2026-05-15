@@ -129,6 +129,31 @@ export default function App() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  const handleLogout = () => {
+    localStorage.removeItem('cyberheaven_wallet');
+    setWallet(null);
+    setShowGate(true);
+    if (isMembersOpen) setIsMembersOpen(false);
+    setActiveChannel('chat');
+    setMessages([{
+      id: 'init-1',
+      sender: 'system',
+      text: 'CYBERHEAVEN PROTOCOL V7.0 LOADED. QUANTUM RESISTANCE: MAXIMUM.',
+      timestamp: new Date()
+    }]);
+    setApiChatMessages([]);
+  };
+
+  const checkResponseStatus = (res: Response, data?: any) => {
+    if (res.status === 401) {
+      handleLogout();
+      throw new Error("Invalid or expired session. Please reconnect.");
+    }
+    if (!res.ok) {
+      throw new Error(data?.error || "An unknown error occurred.");
+    }
+  };
+
   useEffect(() => {
     fetch('/api/university/catalog')
       .then(res => res.json())
@@ -166,6 +191,10 @@ export default function App() {
     const checkIncomingTransfers = async (address: string) => {
       try {
         const res = await fetch(`/api/crypto/history/${address}`);
+        if(res.status === 401) {
+           handleLogout();
+           return;
+        }
         if(res.ok) {
            const data = await res.json();
            let hasNewReceives = false;
@@ -189,6 +218,10 @@ export default function App() {
     const loadApiChatMessages = async (token: string) => {
         try {
           const res = await fetch('/api/chat/messages', { headers: { 'Authorization': `Bearer ${token}` }});
+          if (res.status === 401) {
+             handleLogout();
+             return;
+          }
           if (res.ok) {
             const data = await res.json();
             setApiChatMessages(data.messages);
@@ -265,6 +298,10 @@ export default function App() {
   const updateBalance = async (address: string) => {
     try {
       const res = await fetch(`/api/crypto/balance/${address}`);
+      if(res.status === 401) {
+         handleLogout();
+         return;
+      }
       if(res.ok) {
          const data = await res.json();
          setWallet(prev => prev ? { ...prev, balance: data.balance } : null);
@@ -282,7 +319,7 @@ export default function App() {
           body: JSON.stringify({ username: gateUsername, password: gateUserPassword })
         });
         const data = await res.json();
-        if(!res.ok) throw new Error(data.error || data.message);
+        checkResponseStatus(res, data);
         
         const walletData = {
           algorithm: data.algorithm,
@@ -312,7 +349,7 @@ export default function App() {
           body: JSON.stringify({ algorithm: gateAlg, username: gateUsername, role: gateRole, password: gateUserPassword, adminCode: gateAdminCode })
         });
         const data = await res.json();
-        if(!res.ok) throw new Error(data.error || data.message);
+        checkResponseStatus(res, data);
         
         const walletData = {
           algorithm: data.algorithm,
@@ -365,7 +402,7 @@ export default function App() {
              body: JSON.stringify({ address: wallet.address, course })
            });
            const data = await res.json();
-           if(!res.ok) throw new Error(data.error);
+           checkResponseStatus(res, data);
   
            addMessage('archangel', data.message);
            await updateBalance(wallet.address);
@@ -378,7 +415,7 @@ export default function App() {
              body: JSON.stringify({ address: wallet.address })
            });
            const data = await res.json();
-           if(!res.ok) throw new Error(data.error);
+           checkResponseStatus(res, data);
   
            addMessage('archangel', data.message);
            await updateBalance(wallet.address);
@@ -394,7 +431,7 @@ export default function App() {
              body: JSON.stringify({ address: wallet.address, course })
            });
            const data = await res.json();
-           if(!res.ok) throw new Error(data.error);
+           checkResponseStatus(res, data);
   
            addMessage('archangel', data.message);
            await updateBalance(wallet.address);
@@ -417,7 +454,7 @@ export default function App() {
              body: JSON.stringify({ sender: wallet.address, recipient, amount, publicKey: wallet.publicKeyFull, algorithm: wallet.algorithm })
            });
            const data = await res.json();
-           if(!res.ok) throw new Error(data.error);
+           checkResponseStatus(res, data);
   
            addMessage('system', "Quantum-Safe signature constructed. Appended to Mempool.");
            addMessage('archangel', `Transaction signed using **${wallet.algorithm}** (Signature size: ${data.signatureSizeBytes} bytes).\n\nAuto-triggering Network consensus...`);
@@ -455,7 +492,7 @@ export default function App() {
                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${wallet.token}` } 
            });
            const l2Data = await l2Res.json();
-           if(!l2Res.ok) throw new Error(l2Data.error);
+           checkResponseStatus(l2Res, l2Data);
            
            addMessage('archangel', `Compressed ${l2Data.txCount} bloated lattice transaction(s) down to a **${l2Data.compressedBytes} byte** ZK-SNARK.`);
            
@@ -466,7 +503,7 @@ export default function App() {
               body: JSON.stringify({ proof: l2Data.proof, txPayload: l2Data.txPayload })
            });
            const l3Data = await l3Res.json();
-           if(!l3Res.ok) throw new Error(l3Data.error);
+           checkResponseStatus(l3Res, l3Data);
   
            addMessage('archangel', `Consensus reached via **${l3Data.mechanism}**. Block **${l3Data.blockHeight}** finalized in ${l3Data.finalityTimeMs}ms with hash \`${l3Data.blockHash}\`. ${l3Data.processedTransactions} transactions applied to ledger.`);
            await updateBalance(wallet.address);
@@ -477,7 +514,7 @@ export default function App() {
            
            const res = await fetch(`/api/crypto/history/${wallet.address}`);
            const data = await res.json();
-           if (!res.ok) throw new Error(data.error);
+           checkResponseStatus(res, data);
 
            if (data.history.length === 0) {
              addMessage('archangel', "Your essence record is empty.");
@@ -509,7 +546,7 @@ export default function App() {
              body: JSON.stringify({ targetAddress, text: input })
            });
            const data = await res.json();
-           if (!res.ok) throw new Error(data.error);
+           checkResponseStatus(res, data);
            // We will fetch the new messages in the next poll, but we can also immediately load them
            const token = wallet.token;
            if (token) {
