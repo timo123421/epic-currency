@@ -1,6 +1,67 @@
-import React, { useState, useEffect } from 'react';
-import { Shield, ShieldAlert, Cpu, Network, Zap, Search, Filter } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Shield, ShieldAlert, Cpu, Network, Zap, Search, Filter, ChevronDown } from 'lucide-react';
 import { Wallet } from '../App';
+
+const SearchableSelect = ({ value, onChange, options, placeholder }: { value: string, onChange: (val: string) => void, options: {value: string, label: string}[], placeholder: string }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [wrapperRef]);
+
+  const filteredOptions = options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()) || o.value.toLowerCase().includes(search.toLowerCase()));
+  const selectedOption = options.find(o => o.value === value);
+
+  return (
+    <div className="relative" ref={wrapperRef}>
+      <div 
+        className="w-full bg-black/40 border border-white/10 rounded p-2 text-white text-sm cursor-pointer flex justify-between items-center"
+        onClick={() => { setIsOpen(!isOpen); setSearch(''); }}
+      >
+        <span className={selectedOption ? "" : "text-slate-500 truncate"}>{selectedOption ? selectedOption.label : placeholder}</span>
+        <ChevronDown className="w-4 h-4 text-slate-500 shrink-0" />
+      </div>
+      {isOpen && (
+        <div className="absolute z-50 w-full mt-1 bg-[#090b14] border border-[#d4af37]/30 rounded shadow-2xl overflow-hidden flex flex-col pt-2 pb-1" style={{ maxHeight: '240px' }}>
+          <div className="px-2 pb-2 border-b border-white/10 shrink-0">
+            <input 
+              type="text" 
+              placeholder="Search by name or address..." 
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-full bg-black/60 border border-white/10 rounded px-2 py-1.5 text-white text-xs outline-none focus:border-[#d4af37]/50 transition-colors placeholder:text-slate-500"
+              autoFocus
+            />
+          </div>
+          <div className="overflow-y-auto flex-1 p-1">
+            {filteredOptions.length === 0 ? <div className="p-3 text-slate-500 text-xs text-center font-mono">No results found.</div> : null}
+            {filteredOptions.map(o => (
+              <div 
+                key={o.value} 
+                className={`px-3 py-2 text-white text-xs cursor-pointer rounded mb-0.5 truncate transition-colors ${o.value === value ? 'bg-[#d4af37]/20 text-[#d4af37]' : 'hover:bg-white/10'}`}
+                onClick={() => {
+                  onChange(o.value);
+                  setIsOpen(false);
+                  setSearch('');
+                }}
+              >
+                {o.label}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 export const ArchangelVault = ({ wallet }: { wallet: Wallet | null }) => {
   const [users, setUsers] = useState<any[]>([]);
@@ -71,6 +132,10 @@ export const ArchangelVault = ({ wallet }: { wallet: Wallet | null }) => {
   const handleAdjustBalance = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!wallet) return;
+    if (!targetAddress) {
+      alert("Please select a target address.");
+      return;
+    }
     try {
       const res = await fetch('/api/admin/adjust_balance', {
         method: 'POST',
@@ -91,6 +156,10 @@ export const ArchangelVault = ({ wallet }: { wallet: Wallet | null }) => {
   const handleAssignRole = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!wallet) return;
+    if (!roleTarget) {
+      alert("Please select a target address.");
+      return;
+    }
     try {
       const res = await fetch('/api/admin/assign_role', {
         method: 'POST',
@@ -166,15 +235,12 @@ export const ArchangelVault = ({ wallet }: { wallet: Wallet | null }) => {
               <form onSubmit={handleAdjustBalance} className="space-y-4">
                 <div>
                   <label className="block text-[10px] uppercase tracking-widest text-slate-400 mb-1">Target Address</label>
-                  <select 
+                  <SearchableSelect 
                     value={targetAddress}
-                    onChange={e => setTargetAddress(e.target.value)}
-                    required
-                    className="w-full bg-black/40 border border-white/10 rounded p-2 text-white text-sm"
-                  >
-                    <option value="">Select Target...</option>
-                    {users.map(u => <option key={u.address} value={u.address}>{u.username} ({u.role})</option>)}
-                  </select>
+                    onChange={setTargetAddress}
+                    options={users.map(u => ({ value: u.address, label: `${u.username} (${u.role})` }))}
+                    placeholder="Select Target..."
+                  />
                 </div>
                 <div>
                   <label className="block text-[10px] uppercase tracking-widest text-slate-400 mb-1">Offset Amount (e.g. 50 or -50)</label>
@@ -198,15 +264,12 @@ export const ArchangelVault = ({ wallet }: { wallet: Wallet | null }) => {
               <form onSubmit={handleAssignRole} className="space-y-4">
                 <div>
                   <label className="block text-[10px] uppercase tracking-widest text-slate-400 mb-1">Target Address</label>
-                   <select 
+                  <SearchableSelect 
                     value={roleTarget}
-                    onChange={e => setRoleTarget(e.target.value)}
-                    required
-                    className="w-full bg-black/40 border border-white/10 rounded p-2 text-white text-sm"
-                  >
-                    <option value="">Select Target...</option>
-                    {users.map(u => <option key={u.address} value={u.address}>{u.username} ({u.role})</option>)}
-                  </select>
+                    onChange={setRoleTarget}
+                    options={users.map(u => ({ value: u.address, label: `${u.username} (${u.role})` }))}
+                    placeholder="Select Target..."
+                  />
                 </div>
                 <div>
                   <label className="block text-[10px] uppercase tracking-widest text-slate-400 mb-1">New Role</label>

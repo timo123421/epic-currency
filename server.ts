@@ -107,10 +107,12 @@ function saveDb() {
   users.forEach((val, key) => (usersObj[key] = val));
   const ledgerObj: Record<string, number> = {};
   ledger.forEach((val, key) => (ledgerObj[key] = val));
+  const tmpPath = DB_PATH + '.tmp';
   fs.writeFileSync(
-    DB_PATH,
+    tmpPath,
     JSON.stringify({ users: usersObj, ledger: ledgerObj, auditLogs, chatMessages }, null, 2)
   );
+  fs.renameSync(tmpPath, DB_PATH);
 }
 
 loadDb();
@@ -718,6 +720,12 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // Global Error Handler
+  app.use((err: any, req: any, res: any, next: any) => {
+    console.error("Unhandled Error:", err);
+    res.status(500).json({ error: "Internal Server Error" });
+  });
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
