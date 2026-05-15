@@ -2,6 +2,8 @@ import express from "express";
 import path from "path";
 import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
+import fs from "fs";
+import argon2 from "argon2";
 
 // Exact NIST PQC Standards (Sizes in Bytes)
 const ALGORITHMS = {
@@ -28,6 +30,7 @@ interface UserProfile {
   username: string;
   role: string;
   joinedAt: number;
+  hashedPassword?: string;
 }
 
 // In-memory node state
@@ -37,6 +40,43 @@ const mempool: Transaction[] = [];
 const confirmedTx: Transaction[] = [];
 let currentBlockHeight = 14882901;
 
+// Persistent DB
+const DB_PATH = path.join(process.cwd(), "db.json");
+
+function loadDb() {
+  if (fs.existsSync(DB_PATH)) {
+    try {
+      const dbStr = fs.readFileSync(DB_PATH, "utf8");
+      const db = JSON.parse(dbStr);
+      if (db.users) {
+        Object.entries(db.users).forEach(([addr, user]) => {
+          users.set(addr, user as UserProfile);
+        });
+      }
+      if (db.ledger) {
+        Object.entries(db.ledger).forEach(([addr, bal]) => {
+          ledger.set(addr, bal as number);
+        });
+      }
+    } catch (e) {
+      console.error("Failed to load DB", e);
+    }
+  }
+}
+
+function saveDb() {
+  const usersObj: Record<string, any> = {};
+  users.forEach((val, key) => (usersObj[key] = val));
+  const ledgerObj: Record<string, number> = {};
+  ledger.forEach((val, key) => (ledgerObj[key] = val));
+  fs.writeFileSync(
+    DB_PATH,
+    JSON.stringify({ users: usersObj, ledger: ledgerObj }, null, 2)
+  );
+}
+
+loadDb();
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -44,19 +84,30 @@ async function startServer() {
   app.use(express.json());
 
   // === LAYER 1: QUANTUM-SAFE CRYPTOGRAPHY & IDENTITY ===
-  app.post("/api/auth/register", (req, res) => {
+  app.post("/api/auth/register", async (req, res) => {
     const alg = req.body.algorithm || "ML-DSA-44";
-    const username = req.body.username || "Anonymous_" + crypto.randomBytes(2).toString('hex');
+    const username = req.body.username;
     const role = req.body.role || "Initiate"; // Roles: Initiate, Scholar, Archangel
-    const password = req.body.password;
+    const userPassword = req.body.password;
+    const adminCode = req.body.adminCode;
+    
+    if (!username || !userPassword) {
+      return res.status(400).json({ error: "Username and password required." });
+    }
 
-    if (role === "Archangel" && password !== "SERAPHIM99") {
+    if (role === "Archangel" && adminCode !== "SERAPHIM99") {
       return res.status(403).json({ error: "Invalid access code for Archangel ascension." });
     }
 
+    // Check if username taken
+    const existing = Array.from(users.values()).find(u => u.username === username);
+    if (existing) {
+      return res.status(400).json({ error: "Username already known to the quantum grid." });
+    }
+
+    const hashedPassword = await argon2.hash(userPassword);
     const specs = ALGORITHMS[alg as keyof typeof ALGORITHMS] || ALGORITHMS["ML-DSA-44"];
     
-    // Simulate C++ library bindings for PQC keypair gen
     const privateKey = crypto.randomBytes(specs.sk).toString('hex');
     const publicKey = crypto.randomBytes(specs.pk).toString('hex');
     
@@ -72,9 +123,16 @@ async function startServer() {
         address,
         username,
         role,
+        hashedPassword,
         joinedAt: Date.now()
       });
     }
+
+    saveDb();
+
+    // Do not return hashedPassword
+    const profile = { ...users.get(address) } as any;
+    delete profile.hashedPassword;
 
     res.json({
       algorithm: alg,
@@ -84,8 +142,45 @@ async function startServer() {
       publicKeySizeInBytes: specs.pk,
       privateKeySizeInBytes: specs.sk,
       balance: ledger.get(address),
-      profile: users.get(address),
+      profile,
       message: `Identity forged. Welcome, ${username}. Role: ${role}`
+    });
+  });
+
+  app.post("/api/auth/login", async (req, res) => {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: "Username and password required." });
+    }
+
+    const userEntry = Array.from(users.values()).find(u => u.username === username);
+    if (!userEntry || !userEntry.hashedPassword) {
+      return res.status(403).json({ error: "Invalid credentials." });
+    }
+
+    const isValid = await argon2.verify(userEntry.hashedPassword, password);
+    if (!isValid) {
+      return res.status(403).json({ error: "Invalid credentials." });
+    }
+
+    const address = userEntry.address;
+    const profile = { ...userEntry } as any;
+    delete profile.hashedPassword;
+
+    // Notice: Since keys were randomly generated initially, in a true system we'd reconstruct keys 
+    // or store keys. For this fictional app we return simulated key parameters to log them in.
+    const alg = "ML-DSA-44"; 
+    const specs = ALGORITHMS[alg];
+
+    res.json({
+      algorithm: alg,
+      address,
+      publicKeyFull: "RestoredKey...",
+      publicKeySizeInBytes: specs.pk,
+      privateKeySizeInBytes: specs.sk,
+      balance: ledger.get(address) || 0,
+      profile,
+      message: `Quantum link restored for ${username}.`
     });
   });
 
@@ -95,18 +190,23 @@ async function startServer() {
        return res.status(400).json({ error: "Invalid session" });
     }
     
+    // Check DB
     if (!users.has(wallet.address)) {
-      users.set(wallet.address, wallet.profile);
-    }
-    if (!ledger.has(wallet.address)) {
-      ledger.set(wallet.address, wallet.balance || 0); 
+      // Create local ephemeral connection if it vanished and allow it to persist 
+      // if it was passed via sync, but usually it should be in DB.
+      // Since we now use argon2 DB we should maybe enforce login instead if missing.
+      return res.status(403).json({ error: "Session expired or node reset. Re-authenticate." });
     }
     
     res.json({ success: true, message: "Session verified." });
   });
 
   app.get("/api/users", (req, res) => {
-    res.json({ users: Array.from(users.values()) });
+    const safeUsers = Array.from(users.values()).map(u => {
+      const { hashedPassword, ...rest } = u;
+      return rest;
+    });
+    res.json({ users: safeUsers });
   });
 
   app.post("/api/crypto/sign", (req, res) => {
@@ -180,6 +280,7 @@ async function startServer() {
     const rewardAmount = Math.floor(Math.random() * 50) + 50; // 50 to 100 CHT
     const currentBal = ledger.get(address) || 0;
     ledger.set(address, currentBal + rewardAmount);
+    saveDb();
     
     // Simulate transaction from university
     const signatureRaw = crypto.randomBytes(2420).toString('hex');
@@ -229,6 +330,7 @@ async function startServer() {
     const rewardAmount = Math.floor(Math.random() * 10) + 5; // 5 to 14 CHT
     const currentBal = ledger.get(address) || 0;
     ledger.set(address, currentBal + rewardAmount);
+    saveDb();
     
     // Simulate transaction from university
     const signatureRaw = crypto.randomBytes(2420).toString('hex');
@@ -359,6 +461,7 @@ async function startServer() {
         processedTx++;
       }
     }
+    if (processedTx > 0) saveDb();
 
     // Simulate DAG/PoS validation & Finality block hash
     currentBlockHeight++;

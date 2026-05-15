@@ -9,6 +9,8 @@ type Message = {
   sender: 'user' | 'archangel' | 'system';
   text: string;
   timestamp: Date;
+  type?: 'text' | 'history';
+  historyData?: any[];
 };
 
 type Wallet = {
@@ -23,6 +25,71 @@ type Wallet = {
     username: string;
     role: string;
   };
+};
+
+const TransactionHistory = ({ history, walletAddress }: { history: any[], walletAddress: string }) => {
+  return (
+    <div className="mt-4 border border-[#ffffff1a] rounded-xl overflow-hidden bg-black/40">
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm whitespace-nowrap">
+          <thead className="bg-[#0a0f1a] border-b border-[#ffffff1a] uppercase text-[10px] tracking-widest text-[#d4af37]">
+            <tr>
+              <th className="px-4 py-3">Date/Time</th>
+              <th className="px-4 py-3">Type</th>
+              <th className="px-4 py-3">Amount</th>
+              <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">TX ID</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[#ffffff0a]">
+            {history.map((tx, i) => {
+               const isSender = tx.sender === walletAddress;
+               let type = isSender ? 'Sent' : 'Received';
+               let typeColor = isSender ? 'text-rose-400' : 'text-emerald-400';
+               if (tx.sender === 'CYBERHEAVEN_UNIVERSITY_TREASURY' && !isSender) { type = 'Earned'; typeColor = 'text-emerald-400'; }
+               if (tx.recipient === 'CYBERHEAVEN_UNIVERSITY_TREASURY' && isSender) { type = 'Spent'; typeColor = 'text-rose-400'; }
+
+               const date = new Date(tx.timestamp).toLocaleString();
+               const sign = isSender ? '-' : '+';
+               const isConfirmed = tx.status === 'confirmed';
+               
+               return (
+                 <motion.tr 
+                   key={tx.id} 
+                   initial={{ opacity: 0, y: 5 }} 
+                   animate={{ opacity: 1, y: 0 }} 
+                   transition={{ delay: i * 0.05 }}
+                   className="hover:bg-[#ffffff05] transition-colors"
+                 >
+                   <td className="px-4 py-3 text-[11px] text-slate-400 font-mono">{date}</td>
+                   <td className={`px-4 py-3 font-bold ${typeColor}`}>{type}</td>
+                   <td className="px-4 py-3 font-mono">{sign}{tx.amount} CHT</td>
+                   <td className="px-4 py-3">
+                     {isConfirmed ? (
+                       <motion.div 
+                         initial={{ scale: 0.8, opacity: 0 }}
+                         animate={{ scale: 1, opacity: 1 }}
+                         className="inline-flex items-center gap-1.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-bold"
+                       >
+                         <CheckCircle2 className="w-3 h-3" /> Confirmed
+                       </motion.div>
+                     ) : (
+                       <div className="inline-flex items-center gap-1.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-bold">
+                         <div className="w-3 h-3 border-2 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" /> Pending
+                       </div>
+                     )}
+                   </td>
+                   <td className="px-4 py-3 text-[10px] text-slate-500 font-mono">
+                     `{tx.id.substring(0,8)}...`
+                   </td>
+                 </motion.tr>
+               )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 };
 
 export default function App() {
@@ -50,10 +117,12 @@ export default function App() {
   const [isMembersOpen, setIsMembersOpen] = useState(false);
   
   const [showGate, setShowGate] = useState(true);
+  const [gateMode, setGateMode] = useState<'login'|'register'>('login');
   const [gateUsername, setGateUsername] = useState('');
   const [gateRole, setGateRole] = useState('Initiate');
   const [gateAlg, setGateAlg] = useState('ML-DSA-44');
-  const [gatePassword, setGatePassword] = useState('');
+  const [gateUserPassword, setGateUserPassword] = useState('');
+  const [gateAdminCode, setGateAdminCode] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -64,9 +133,11 @@ export default function App() {
       .catch(console.error);
 
     const savedWalletStr = localStorage.getItem('cyberheaven_wallet');
+    let currentWalletAddress = '';
     if (savedWalletStr) {
       try {
          const savedWallet = JSON.parse(savedWalletStr);
+         currentWalletAddress = savedWallet.address;
          fetch('/api/auth/restore', {
            method: 'POST',
            headers: { 'Content-Type': 'application/json' },
@@ -86,9 +157,48 @@ export default function App() {
       }
     }
 
+    let knownTxIds = new Set<string>();
+    let isInitialTxLoad = true;
+
+    const checkIncomingTransfers = async (address: string) => {
+      try {
+        const res = await fetch(`/api/crypto/history/${address}`);
+        if(res.ok) {
+           const data = await res.json();
+           let hasNewReceives = false;
+           for (const tx of data.history) {
+             if (tx.status === 'confirmed') {
+               if (!knownTxIds.has(tx.id)) {
+                 if (!isInitialTxLoad && tx.recipient === address && tx.sender !== 'CYBERHEAVEN_UNIVERSITY_TREASURY') {
+                   // Avoid university spam if needed, or include it
+                   addMessage('system', `INCOMING TRANSFER: You received ${tx.amount} CHT.`);
+                   hasNewReceives = true;
+                 }
+                 knownTxIds.add(tx.id);
+               }
+             }
+           }
+           isInitialTxLoad = false;
+        }
+      } catch {}
+    };
+
     const interval = setInterval(() => {
        fetchUsers();
-    }, 10000);
+       if (currentWalletAddress) {
+         updateBalance(currentWalletAddress);
+         checkIncomingTransfers(currentWalletAddress);
+       } else {
+         const updatedWalletStr = localStorage.getItem('cyberheaven_wallet');
+         if (updatedWalletStr) {
+           try {
+             currentWalletAddress = JSON.parse(updatedWalletStr).address;
+             updateBalance(currentWalletAddress);
+             checkIncomingTransfers(currentWalletAddress);
+           } catch(e) {}
+         }
+       }
+    }, 5000); // Poll every 5 seconds for background updates
     return () => clearInterval(interval);
   }, []);
 
@@ -108,8 +218,8 @@ export default function App() {
     scrollToBottom();
   }, [messages, isTyping]);
 
-  const addMessage = (sender: 'user' | 'archangel' | 'system', text: string) => {
-    setMessages(prev => [...prev, { id: Math.random().toString(36).substring(7), sender, text, timestamp: new Date() }]);
+  const addMessage = (sender: 'user' | 'archangel' | 'system', text: string, type: 'text' | 'history' = 'text', historyData?: any[]) => {
+    setMessages(prev => [...prev, { id: Math.random().toString(36).substring(7), sender, text, timestamp: new Date(), type, historyData }]);
   };
 
   const updateBalance = async (address: string) => {
@@ -122,36 +232,68 @@ export default function App() {
     } catch {}
   };
 
-  const handleRegister = async (e: React.FormEvent) => {
+  const handleGateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
-      const res = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ algorithm: gateAlg, username: gateUsername, role: gateRole, password: gatePassword })
-      });
-      const data = await res.json();
-      if(!res.ok) throw new Error(data.error || data.message);
-      
-      const walletData = {
-        algorithm: data.algorithm,
-        address: data.address,
-        publicKeyFull: data.publicKeyFull,
-        publicKeyPreview: data.publicKeyPreview,
-        publicKeySize: data.publicKeySizeInBytes,
-        privateKeySize: data.privateKeySizeInBytes,
-        balance: data.balance,
-        profile: data.profile
-      };
-      
-      setWallet(walletData);
-      localStorage.setItem('cyberheaven_wallet', JSON.stringify(walletData));
-      
-      setShowGate(false);
-      fetchUsers();
-      addMessage('archangel', `Identity forged. Welcome, **${data.profile.username}**. You carry the rank of **${data.profile.role}**.\n\nYour address is \`${data.address}\` secured via **${data.algorithm}**.`);
-    } catch (e: any) {
-      alert("Registration failed: " + e.message);
+    if (gateMode === 'login') {
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: gateUsername, password: gateUserPassword })
+        });
+        const data = await res.json();
+        if(!res.ok) throw new Error(data.error || data.message);
+        
+        const walletData = {
+          algorithm: data.algorithm,
+          address: data.address,
+          publicKeyFull: data.publicKeyFull,
+          publicKeyPreview: "RestoredKey...",
+          publicKeySize: data.publicKeySizeInBytes,
+          privateKeySize: data.privateKeySizeInBytes,
+          balance: data.balance,
+          profile: data.profile
+        };
+        
+        setWallet(walletData);
+        localStorage.setItem('cyberheaven_wallet', JSON.stringify(walletData));
+        
+        setShowGate(false);
+        fetchUsers();
+        addMessage('archangel', `Authentication successful. Welcome back, **${data.profile.username}**.`);
+      } catch (e: any) {
+        alert("Login failed: " + e.message);
+      }
+    } else {
+      try {
+        const res = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ algorithm: gateAlg, username: gateUsername, role: gateRole, password: gateUserPassword, adminCode: gateAdminCode })
+        });
+        const data = await res.json();
+        if(!res.ok) throw new Error(data.error || data.message);
+        
+        const walletData = {
+          algorithm: data.algorithm,
+          address: data.address,
+          publicKeyFull: data.publicKeyFull,
+          publicKeyPreview: data.publicKeyPreview,
+          publicKeySize: data.publicKeySizeInBytes,
+          privateKeySize: data.privateKeySizeInBytes,
+          balance: data.balance,
+          profile: data.profile
+        };
+        
+        setWallet(walletData);
+        localStorage.setItem('cyberheaven_wallet', JSON.stringify(walletData));
+        
+        setShowGate(false);
+        fetchUsers();
+        addMessage('archangel', `Identity forged. Welcome, **${data.profile.username}**. You carry the rank of **${data.profile.role}**.\n\nYour address is \`${data.address}\` secured via **${data.algorithm}**.`);
+      } catch (e: any) {
+        alert("Registration failed: " + e.message);
+      }
     }
   };
 
@@ -237,7 +379,28 @@ export default function App() {
            if(!res.ok) throw new Error(data.error);
   
            addMessage('system', "Quantum-Safe signature constructed. Appended to Mempool.");
-           addMessage('archangel', `Transaction signed using **${wallet.algorithm}** (Signature size: ${data.signatureSizeBytes} bytes). Requires \`/network\` processing to finalize consensus.\n\nTX ID: \`${data.txId}\``);
+           addMessage('archangel', `Transaction signed using **${wallet.algorithm}** (Signature size: ${data.signatureSizeBytes} bytes).\n\nAuto-triggering Network consensus...`);
+           
+           try {
+             const l2Res = await fetch('/api/network/compress', { method: 'POST' });
+             const l2Data = await l2Res.json();
+             
+             if(l2Res.ok) {
+               addMessage('system', 'Compressing & Submitting ZK-Proof to Validators...');
+               const l3Res = await fetch('/api/network/consensus', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ proof: l2Data.proof, txPayload: l2Data.txPayload })
+               });
+               const l3Data = await l3Res.json();
+               if(l3Res.ok) {
+                 addMessage('archangel', `✅ Consensus reached. ${amount} CHT has been successfully delivered to the recipient.\n\nTX ID: \`${data.txId}\``);
+                 await updateBalance(wallet.address);
+               }
+             }
+           } catch(e) {
+             addMessage('system', 'Network finality pending.');
+           }
         }
         else if (cmd === '/network') {
            if (!wallet) throw new Error("You must `/connect` first.");
@@ -272,20 +435,7 @@ export default function App() {
            if (data.history.length === 0) {
              addMessage('archangel', "Your essence record is empty.");
            } else {
-             const historyMarkdown = data.history.map((tx: any) => {
-               const isSender = tx.sender === wallet.address;
-               let type = isSender ? 'Sent' : 'Received';
-               if (tx.sender === 'CYBERHEAVEN_UNIVERSITY_TREASURY' && !isSender) type = 'Earned';
-               if (tx.recipient === 'CYBERHEAVEN_UNIVERSITY_TREASURY' && isSender) type = 'Spent';
-
-               const date = new Date(tx.timestamp).toLocaleString();
-               const sign = isSender ? '-' : '+';
-               const statusIcon = tx.status === 'confirmed' ? '✅' : '⏳';
-               
-               return `| ${date} | **${type}** | ${sign}${tx.amount} CHT | ${statusIcon} ${tx.status} | \`${tx.id.substring(0,8)}...\` |`;
-             }).join('\n');
-
-             addMessage('archangel', `**TRANSACTION LEDGER**\n\n| Date/Time | Type | Amount | Status | TX ID |\n|---|---|---|---|---|\n${historyMarkdown}`);
+             addMessage('archangel', "**TRANSACTION LEDGER**", 'history', data.history);
            }
         }
          else if (cmd === '/help') {
@@ -303,15 +453,12 @@ export default function App() {
   };
 
   return (
-    <div className="flex bg-[#020203] items-center justify-center min-h-screen w-full sm:p-4 md:p-8 relative overflow-hidden">
+    <div className="flex bg-[#06080E] h-[100dvh] w-full text-slate-300 font-sans selection:bg-cyan-900/50 relative overflow-hidden">
       {/* Background Ambience */}
-      <div className="absolute inset-0 cyberheaven-grid opacity-30 pointer-events-none"></div>
-      <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-[#d4af37]/5 rounded-full blur-[150px] mix-blend-screen pointer-events-none" />
-      <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-cyan-900/10 rounded-full blur-[150px] mix-blend-screen pointer-events-none" />
+      <div className="absolute inset-0 cyberheaven-grid opacity-30 pointer-events-none z-0"></div>
+      <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-[#d4af37]/5 rounded-full blur-[150px] mix-blend-screen pointer-events-none z-0" />
+      <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-cyan-900/10 rounded-full blur-[150px] mix-blend-screen pointer-events-none z-0" />
 
-      {/* Main App Window */}
-      <div className="w-full max-w-screen-2xl h-[100vh] sm:h-[calc(100vh-2rem)] md:h-[calc(100vh-4rem)] max-h-[1000px] bg-[#06080E] text-slate-300 font-sans selection:bg-cyan-900/50 relative overflow-hidden flex sm:rounded-2xl sm:border sm:border-[#ffffff1a] shadow-2xl z-10">
-        
       {/* Guild Server Bar (Extreme Left) */}
       <div className={cn(
         "w-16 shrink-0 bg-[#030408]/80 backdrop-blur-md border-r border-[#ffffff0a] flex flex-col items-center py-4 z-20 absolute md:relative h-full transition-transform duration-300",
@@ -435,6 +582,13 @@ export default function App() {
                        )}>
                           {m.sender === 'user' ? (
                             <div className="font-mono text-cyan-300">{m.text}</div>
+                          ) : m.type === 'history' && m.historyData ? (
+                            <div className="mt-2 text-sm leading-relaxed max-w-none">
+                              <div className="prose prose-invert prose-p:my-1 prose-a:text-cyan-400 prose-code:text-[#d4af37] prose-code:bg-black/50 prose-code:px-1 prose-code:rounded prose-code:border prose-code:border-[#d4af37]/20">
+                                <ReactMarkdown>{m.text}</ReactMarkdown>
+                              </div>
+                              <TransactionHistory history={m.historyData} walletAddress={wallet?.address || ''} />
+                            </div>
                           ) : (
                             <ReactMarkdown>{m.text}</ReactMarkdown>
                           )}
@@ -470,7 +624,7 @@ export default function App() {
                   value={commandInput}
                   onChange={(e) => setCommandInput(e.target.value)}
                   placeholder="Message #general-chat (/teach, /balance, /help)..."
-                  className="w-full bg-transparent text-slate-200 p-4 outline-none font-sans text-sm"
+                  className="w-full bg-transparent text-slate-200 p-4 outline-none font-sans text-base md:text-sm"
                   disabled={isTyping}
                 />
                 <button type="submit" disabled={isTyping || !commandInput.trim()} className="absolute right-2 p-2 bg-black/50 hover:bg-[#d4af37]/20 text-[#d4af37] rounded-lg transition-colors disabled:opacity-50">
@@ -638,7 +792,22 @@ export default function App() {
              <h2 className="text-center text-2xl font-serif font-bold text-white mb-2">Cyberheaven Gate</h2>
              <p className="text-center text-xs text-slate-400 font-mono mb-8">Establish quantum-resistant ephemeral identity.</p>
 
-             <form onSubmit={handleRegister} className="space-y-5">
+             <div className="flex gap-4 mb-6">
+               <button 
+                 onClick={() => setGateMode('login')} 
+                 className={cn("flex-1 pb-2 border-b-2 font-bold text-sm tracking-widest uppercase transition-colors", gateMode === 'login' ? "border-[#d4af37] text-[#d4af37]" : "border-transparent text-slate-500 hover:text-slate-300")}
+               >
+                 Login
+               </button>
+               <button 
+                 onClick={() => setGateMode('register')} 
+                 className={cn("flex-1 pb-2 border-b-2 font-bold text-sm tracking-widest uppercase transition-colors", gateMode === 'register' ? "border-[#d4af37] text-[#d4af37]" : "border-transparent text-slate-500 hover:text-slate-300")}
+               >
+                 Register
+               </button>
+             </div>
+
+             <form onSubmit={handleGateSubmit} className="space-y-5">
                <div>
                  <label className="block text-[10px] uppercase tracking-widest text-[#d4af37] mb-1 font-bold">Username</label>
                  <input 
@@ -646,62 +815,77 @@ export default function App() {
                    required
                    value={gateUsername}
                    onChange={e => setGateUsername(e.target.value)}
-                   className="w-full bg-[#0a0f1a] border border-[#ffffff1a] rounded-lg p-3 text-white text-sm outline-none focus:border-cyan-500 transition-colors"
+                   className="w-full bg-[#0a0f1a] border border-[#ffffff1a] rounded-lg p-3 text-white text-base md:text-sm outline-none focus:border-cyan-500 transition-colors"
                    placeholder="Enter moniker..."
                  />
                </div>
 
                <div>
-                 <label className="block text-[10px] uppercase tracking-widest text-[#d4af37] mb-1 font-bold">Role Selection</label>
-                 <select 
-                   value={gateRole}
-                   onChange={e => {
-                     setGateRole(e.target.value);
-                     if (e.target.value !== 'Archangel') setGatePassword('');
-                   }}
-                   className="w-full bg-[#0a0f1a] border border-[#ffffff1a] rounded-lg p-3 text-white text-sm outline-none focus:border-cyan-500 transition-colors appearance-none cursor-pointer"
-                 >
-                   <option value="Initiate">Initiate (Student - Learns)</option>
-                   <option value="Scholar">Scholar (Teacher - Earns)</option>
-                   <option value="Archangel">Archangel (Admin - Vault Access)</option>
-                 </select>
+                 <label className="block text-[10px] uppercase tracking-widest text-[#d4af37] mb-1 font-bold">Password</label>
+                 <input 
+                   type="password" 
+                   required
+                   value={gateUserPassword}
+                   onChange={e => setGateUserPassword(e.target.value)}
+                   className="w-full bg-[#0a0f1a] border border-[#ffffff1a] rounded-lg p-3 text-white text-base md:text-sm outline-none focus:border-cyan-500 transition-colors font-mono"
+                   placeholder="Enter password..."
+                 />
                </div>
 
-               {gateRole === 'Archangel' && (
-                 <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}>
-                   <label className="block text-[10px] uppercase tracking-widest text-[#d4af37] mb-1 font-bold">Vault Access Code</label>
-                   <input 
-                     type="password" 
-                     required
-                     value={gatePassword}
-                     onChange={e => setGatePassword(e.target.value)}
-                     className="w-full bg-[#0a0f1a] border border-[#d4af37]/40 rounded-lg p-3 text-[#d4af37] text-sm outline-none focus:border-[#d4af37] transition-colors font-mono"
-                     placeholder="Enter Archangel code (e.g. SERAPHIM99)"
-                   />
-                 </motion.div>
+               {gateMode === 'register' && (
+                 <>
+                   <div>
+                     <label className="block text-[10px] uppercase tracking-widest text-[#d4af37] mb-1 font-bold">Role Selection</label>
+                     <select 
+                       value={gateRole}
+                       onChange={e => {
+                         setGateRole(e.target.value);
+                         if (e.target.value !== 'Archangel') setGateAdminCode('');
+                       }}
+                       className="w-full bg-[#0a0f1a] border border-[#ffffff1a] rounded-lg p-3 text-white text-base md:text-sm outline-none focus:border-cyan-500 transition-colors appearance-none cursor-pointer"
+                     >
+                       <option value="Initiate">Initiate (Student - Learns)</option>
+                       <option value="Scholar">Scholar (Teacher - Earns)</option>
+                       <option value="Archangel">Archangel (Admin - Vault Access)</option>
+                     </select>
+                   </div>
+
+                   {gateRole === 'Archangel' && (
+                     <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}>
+                       <label className="block text-[10px] uppercase tracking-widest text-[#d4af37] mb-1 font-bold">Vault Access Code</label>
+                       <input 
+                         type="password" 
+                         required
+                         value={gateAdminCode}
+                         onChange={e => setGateAdminCode(e.target.value)}
+                         className="w-full bg-[#0a0f1a] border border-[#d4af37]/40 rounded-lg p-3 text-[#d4af37] text-base md:text-sm outline-none focus:border-[#d4af37] transition-colors font-mono"
+                         placeholder="Enter Archangel code (e.g. SERAPHIM99)"
+                       />
+                     </motion.div>
+                   )}
+                   
+                   <div>
+                     <label className="block text-[10px] uppercase tracking-widest text-[#d4af37] mb-1 font-bold">Signature Algorithm</label>
+                     <select 
+                       value={gateAlg}
+                       onChange={e => setGateAlg(e.target.value)}
+                       className="w-full bg-[#0a0f1a] border border-[#ffffff1a] rounded-lg p-3 text-white text-base md:text-sm outline-none focus:border-cyan-500 transition-colors appearance-none cursor-pointer"
+                     >
+                       <option value="ML-DSA-44">ML-DSA-44 (Standard)</option>
+                       <option value="ML-DSA-65">ML-DSA-65 (High Security)</option>
+                       <option value="FN-DSA-512">FN-DSA-512 (Falcon)</option>
+                     </select>
+                   </div>
+                 </>
                )}
-               
-               <div>
-                 <label className="block text-[10px] uppercase tracking-widest text-[#d4af37] mb-1 font-bold">Signature Algorithm</label>
-                 <select 
-                   value={gateAlg}
-                   onChange={e => setGateAlg(e.target.value)}
-                   className="w-full bg-[#0a0f1a] border border-[#ffffff1a] rounded-lg p-3 text-white text-sm outline-none focus:border-cyan-500 transition-colors appearance-none cursor-pointer"
-                 >
-                   <option value="ML-DSA-44">ML-DSA-44 (Standard)</option>
-                   <option value="ML-DSA-65">ML-DSA-65 (High Security)</option>
-                   <option value="FN-DSA-512">FN-DSA-512 (Falcon)</option>
-                 </select>
-               </div>
 
                <button type="submit" className="w-full bg-[#d4af37] text-black font-bold py-3 rounded-lg hover:bg-white transition-colors mt-6 font-serif shadow-[0_0_20px_rgba(212,175,55,0.4)] cursor-pointer">
-                 Generate Identity & Connect
+                 {gateMode === 'login' ? 'Authenticate' : 'Generate Identity & Connect'}
                </button>
              </form>
            </div>
         </div>
       )}
-      </div>
     </div>
   );
 }
