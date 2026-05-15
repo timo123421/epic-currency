@@ -1,0 +1,8 @@
+{
+  "name": "Cyberheaven University",
+  "description": "An online Discord-bot simulated interface backed by real Post-Quantum Cryptography where you earn Cyberheaven Tokens (CHT) by teaching.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
