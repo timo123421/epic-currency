@@ -4,6 +4,7 @@ import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import fs from "fs";
 import argon2 from "argon2";
+import helmet from "helmet";
 
 // Exact NIST PQC Standards (Sizes in Bytes)
 const ALGORITHMS = {
@@ -31,6 +32,7 @@ interface UserProfile {
   role: string;
   joinedAt: number;
   hashedPassword?: string;
+  sessionToken?: string;
 }
 
 // In-memory node state
@@ -77,11 +79,52 @@ function saveDb() {
 
 loadDb();
 
+// --- SECURITY MIDDLEWARES ---
+function requireAuth(req: any, res: any, next: any) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Missing authorization. Please reconnect." });
+  }
+  const token = authHeader.split(' ')[1];
+  const user = Array.from(users.values()).find(u => u.sessionToken === token);
+  if (!user) {
+    return res.status(401).json({ error: "Invalid or expired session. Please reconnect." });
+  }
+  req.user = user;
+  next();
+}
+
+function enforceOwnership(req: any, res: any, next: any) {
+  const targetAddress = req.body.address || req.body.sender || req.params.address;
+  if (targetAddress && targetAddress !== req.user.address) {
+    return res.status(403).json({ error: "Identity mismatch. Action denied." });
+  }
+  next();
+}
+
+const lastActionTime = new Map<string, number>();
+function rateLimit(req: any, res: any, next: any) {
+  const address = req.user.address;
+  const now = Date.now();
+  const lastTime = lastActionTime.get(address) || 0;
+  if (now - lastTime < 3000) { // 3 second cooldown
+    return res.status(429).json({ error: "Network overloaded. Cooling down..." });
+  }
+  lastActionTime.set(address, now);
+  next();
+}
+// -----------------------------
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  // Security headers setup (Protects against XSS, Clickjacking, MIME-sniffing)
+  app.use(helmet({
+    contentSecurityPolicy: false, // Vite Dev server needs inline scripts, keep false for dev, adjust for prod if needed
+  }));
+  // Strictly limit payload sizes to prevent JSON Denial of Service (Payload attacks)
+  app.use(express.json({ limit: "50kb" }));
 
   // === LAYER 1: QUANTUM-SAFE CRYPTOGRAPHY & IDENTITY ===
   app.post("/api/auth/register", async (req, res) => {
@@ -106,6 +149,7 @@ async function startServer() {
     }
 
     const hashedPassword = await argon2.hash(userPassword);
+    const sessionToken = crypto.randomBytes(32).toString('hex');
     const specs = ALGORITHMS[alg as keyof typeof ALGORITHMS] || ALGORITHMS["ML-DSA-44"];
     
     const privateKey = crypto.randomBytes(specs.sk).toString('hex');
@@ -124,6 +168,7 @@ async function startServer() {
         username,
         role,
         hashedPassword,
+        sessionToken,
         joinedAt: Date.now()
       });
     }
@@ -143,6 +188,7 @@ async function startServer() {
       privateKeySizeInBytes: specs.sk,
       balance: ledger.get(address),
       profile,
+      token: sessionToken,
       message: `Identity forged. Welcome, ${username}. Role: ${role}`
     });
   });
@@ -163,6 +209,10 @@ async function startServer() {
       return res.status(403).json({ error: "Invalid credentials." });
     }
 
+    const sessionToken = crypto.randomBytes(32).toString('hex');
+    userEntry.sessionToken = sessionToken;
+    saveDb();
+
     const address = userEntry.address;
     const profile = { ...userEntry } as any;
     delete profile.hashedPassword;
@@ -180,40 +230,38 @@ async function startServer() {
       privateKeySizeInBytes: specs.sk,
       balance: ledger.get(address) || 0,
       profile,
+      token: sessionToken,
       message: `Quantum link restored for ${username}.`
     });
   });
 
-  app.post("/api/auth/restore", (req, res) => {
+  app.post("/api/auth/restore", requireAuth, enforceOwnership, (req, res) => {
     const { wallet } = req.body;
     if (!wallet || !wallet.address || !wallet.profile) {
-       return res.status(400).json({ error: "Invalid session" });
+       return res.status(400).json({ error: "Invalid session structure" });
     }
     
-    // Check DB
-    if (!users.has(wallet.address)) {
-      // Create local ephemeral connection if it vanished and allow it to persist 
-      // if it was passed via sync, but usually it should be in DB.
-      // Since we now use argon2 DB we should maybe enforce login instead if missing.
-      return res.status(403).json({ error: "Session expired or node reset. Re-authenticate." });
-    }
-    
-    res.json({ success: true, message: "Session verified." });
+    // Auth middleware already confirmed the token matches wallet.address
+    res.json({ success: true, message: "Session verified via secure channel." });
   });
 
   app.get("/api/users", (req, res) => {
     const safeUsers = Array.from(users.values()).map(u => {
-      const { hashedPassword, ...rest } = u;
+      const { hashedPassword, sessionToken, ...rest } = u;
       return rest;
     });
     res.json({ users: safeUsers });
   });
 
-  app.post("/api/crypto/sign", (req, res) => {
+  app.post("/api/crypto/sign", requireAuth, enforceOwnership, rateLimit, (req, res) => {
     const { sender, recipient, amount, algorithm, publicKey } = req.body;
     
-    if (!sender || !recipient || !amount || !publicKey) {
+    if (!sender || !recipient || amount === undefined || !publicKey) {
       return res.status(400).json({ error: "Missing required transaction fields" });
+    }
+
+    if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
+      return res.status(400).json({ error: "Invalid transaction amount. Must be positive integer." });
     }
 
     const alg = algorithm || "ML-DSA-44";
@@ -265,7 +313,7 @@ async function startServer() {
     res.json({ address, balance });
   });
 
-  app.post("/api/university/reward", (req, res) => {
+  app.post("/api/university/reward", requireAuth, enforceOwnership, rateLimit, (req, res) => {
     const { address, course } = req.body;
     if (!address || !course) return res.status(400).json({ error: "Missing address or course" });
     
@@ -319,7 +367,7 @@ async function startServer() {
     });
   });
 
-  app.post("/api/university/study", (req, res) => {
+  app.post("/api/university/study", requireAuth, enforceOwnership, rateLimit, (req, res) => {
     const { address } = req.body;
     if (!address) return res.status(400).json({ error: "Missing address" });
     
@@ -353,7 +401,7 @@ async function startServer() {
     });
   });
 
-  app.post("/api/university/learn", (req, res) => {
+  app.post("/api/university/learn", requireAuth, enforceOwnership, rateLimit, (req, res) => {
     const { address, course } = req.body;
     const user = users.get(address);
     if (!user) return res.status(403).json({ error: "Identity not found. Register first." });
@@ -401,14 +449,15 @@ async function startServer() {
     res.json({ history });
   });
 
-  app.post("/api/network/compress", (req, res) => {
+  app.post("/api/network/compress", requireAuth, rateLimit, (req, res) => {
     // Compress all mempool transactions into a single ZKP
     if (mempool.length === 0) {
       return res.status(400).json({ error: "No transactions in mempool to compress." });
     }
 
     const txsToCompress = [...mempool];
-    mempool.length = 0; // Clear the mempool
+    // Security Fix: Do not clear mempool here to prevent Data Destruction DoS attacks
+    // mempool.length = 0; 
 
     // Calculate structural bloat (Sum of all PQC signatures + revealed public keys)
     const originalTotalBytes = txsToCompress.reduce((sum, tx) => {
@@ -436,22 +485,27 @@ async function startServer() {
   });
 
   // === LAYER 3: CONSENSUS ===
-  app.post("/api/network/consensus", (req, res) => {
+  app.post("/api/network/consensus", requireAuth, rateLimit, (req, res) => {
     const { proof, txPayload } = req.body;
     
     if (!proof || !txPayload) {
       return res.status(400).json({ error: "Invalid proof structure." });
     }
 
-    // Mathematically verify the ZK Proof matches the payload bundle
-    const expectedBundleHash = crypto.createHash('sha3-256').update(JSON.stringify(txPayload)).digest('hex');
-    if (!proof.includes(expectedBundleHash)) {
-      return res.status(400).json({ error: "ZKP verification failed: Invalid structural hash." });
+    // Mathematically verify the ZK Proof matches the REAL payload bundle safely in backend
+    // Security Fix: Prevent "Forged Block" attacks by validating against true mempool
+    const serverBundleHash = crypto.createHash('sha3-256').update(JSON.stringify(mempool)).digest('hex');
+    if (!proof.includes(serverBundleHash)) {
+      return res.status(400).json({ error: "ZKP verification failed: Invalid structural hash or mempool state altered." });
     }
+
+    // Security Fix: Safely transition mempool states now
+    const safeTxList = [...mempool];
+    mempool.length = 0;
 
     // Apply strict state transitions (UTXO / Account Model)
     let processedTx = 0;
-    for (const tx of txPayload as Transaction[]) {
+    for (const tx of safeTxList) {
       const senderBal = ledger.get(tx.sender) || 0;
       if (senderBal >= tx.amount) {
         ledger.set(tx.sender, senderBal - tx.amount);

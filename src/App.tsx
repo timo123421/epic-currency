@@ -25,6 +25,7 @@ type Wallet = {
     username: string;
     role: string;
   };
+  token?: string;
 };
 
 const TransactionHistory = ({ history, walletAddress }: { history: any[], walletAddress: string }) => {
@@ -140,7 +141,7 @@ export default function App() {
          currentWalletAddress = savedWallet.address;
          fetch('/api/auth/restore', {
            method: 'POST',
-           headers: { 'Content-Type': 'application/json' },
+           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${savedWallet.token}` },
            body: JSON.stringify({ wallet: savedWallet })
          }).then(res => {
            if(res.ok) {
@@ -315,12 +316,13 @@ export default function App() {
         } 
         else if (cmd === '/teach') {
            if (!wallet) throw new Error("You must `/connect` first.");
+           if (wallet.profile.role === 'Initiate') throw new Error("Initiates lack the wisdom to `/teach`. Enroll in courses to ascend to Scholar or Archangel.");
            const course = args.join(' ');
            if (!course) throw new Error("Provide a subject to teach, e.g. `/teach Quantum Fields 101`");
            
            const res = await fetch('/api/university/reward', {
              method: 'POST',
-             headers: { 'Content-Type': 'application/json' },
+             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${wallet.token}` },
              body: JSON.stringify({ address: wallet.address, course })
            });
            const data = await res.json();
@@ -333,7 +335,7 @@ export default function App() {
            if (!wallet) throw new Error("You must be connected first.");
            const res = await fetch('/api/university/study', {
              method: 'POST',
-             headers: { 'Content-Type': 'application/json' },
+             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${wallet.token}` },
              body: JSON.stringify({ address: wallet.address })
            });
            const data = await res.json();
@@ -349,7 +351,7 @@ export default function App() {
   
            const res = await fetch('/api/university/learn', {
              method: 'POST',
-             headers: { 'Content-Type': 'application/json' },
+             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${wallet.token}` },
              body: JSON.stringify({ address: wallet.address, course })
            });
            const data = await res.json();
@@ -372,7 +374,7 @@ export default function App() {
   
            const res = await fetch('/api/crypto/sign', {
              method: 'POST',
-             headers: { 'Content-Type': 'application/json' },
+             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${wallet.token}` },
              body: JSON.stringify({ sender: wallet.address, recipient, amount, publicKey: wallet.publicKeyFull, algorithm: wallet.algorithm })
            });
            const data = await res.json();
@@ -382,14 +384,17 @@ export default function App() {
            addMessage('archangel', `Transaction signed using **${wallet.algorithm}** (Signature size: ${data.signatureSizeBytes} bytes).\n\nAuto-triggering Network consensus...`);
            
            try {
-             const l2Res = await fetch('/api/network/compress', { method: 'POST' });
+             const l2Res = await fetch('/api/network/compress', { 
+               method: 'POST',
+               headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${wallet.token}` } 
+             });
              const l2Data = await l2Res.json();
              
              if(l2Res.ok) {
                addMessage('system', 'Compressing & Submitting ZK-Proof to Validators...');
                const l3Res = await fetch('/api/network/consensus', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
+                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${wallet.token}` },
                   body: JSON.stringify({ proof: l2Data.proof, txPayload: l2Data.txPayload })
                });
                const l3Data = await l3Res.json();
@@ -406,7 +411,10 @@ export default function App() {
            if (!wallet) throw new Error("You must `/connect` first.");
            addMessage('system', 'Triggering Layer 2 ZKP Compression over current Mempool...');
            
-           const l2Res = await fetch('/api/network/compress', { method: 'POST' });
+           const l2Res = await fetch('/api/network/compress', { 
+               method: 'POST',
+               headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${wallet.token}` } 
+           });
            const l2Data = await l2Res.json();
            if(!l2Res.ok) throw new Error(l2Data.error);
            
@@ -415,7 +423,7 @@ export default function App() {
            addMessage('system', 'Submitting ZK-Proof to Layer 3 Cyberheaven Validators...');
            const l3Res = await fetch('/api/network/consensus', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${wallet.token}` },
               body: JSON.stringify({ proof: l2Data.proof, txPayload: l2Data.txPayload })
            });
            const l3Data = await l3Res.json();
@@ -439,7 +447,12 @@ export default function App() {
            }
         }
          else if (cmd === '/help') {
-           addMessage('archangel', `Available incantations:\n\n- \`/study\` : Diligently study in the archives to discover CHT (Initiates)\n- \`/teach <course>\` : Impart wisdom, earn CHT (added to Mempool)\n- \`/learn <course>\` : Spend CHT to gain knowledge\n- \`/send <amount> <address>\` : Transfer CHT in mempool\n- \`/balance\` : Check confirmed holdings\n- \`/history\` : View your temporal essence ledger\n- \`/network\` : Trigger Layer 2 Compress + Layer 3 Consensus`);
+           const isInitiate = wallet?.profile.role === 'Initiate';
+           let helpText = `Available incantations:\n\n- \`/study\` : Diligently study in the archives to discover CHT\n- \`/learn <course>\` : Spend CHT to gain knowledge\n- \`/send <amount> <address>\` : Transfer CHT in mempool\n- \`/balance\` : Check confirmed holdings\n- \`/history\` : View your temporal essence ledger\n- \`/network\` : Trigger Layer 2 Compress + Layer 3 Consensus`;
+           if (!isInitiate) {
+               helpText += `\n- \`/teach <course>\` : Impart wisdom, earn CHT (added to Mempool) [Scholars/Archangels]`;
+           }
+           addMessage('archangel', helpText);
         }
         else {
            addMessage('archangel', `Unknown command. Type \`/help\` for the sacred rites.`);
@@ -623,7 +636,7 @@ export default function App() {
                   type="text" 
                   value={commandInput}
                   onChange={(e) => setCommandInput(e.target.value)}
-                  placeholder="Message #general-chat (/teach, /balance, /help)..."
+                  placeholder={wallet?.profile.role === 'Initiate' ? "Message #general-chat (/study, /balance, /help)..." : "Message #general-chat (/teach, /balance, /help)..."}
                   className="w-full bg-transparent text-slate-200 p-4 outline-none font-sans text-base md:text-sm"
                   disabled={isTyping}
                 />
@@ -654,15 +667,28 @@ export default function App() {
                      <div className="text-cyan-400 font-mono font-bold flex items-center gap-1">
                        <CheckCircle2 className="w-4 h-4" /> {course.cost} CHT
                      </div>
-                     <button 
-                       onClick={() => {
-                          setActiveChannel('chat');
-                          handleCommand(undefined, `/learn ${course.title}`);
-                       }}
-                       className="px-4 py-2 bg-[#d4af37]/10 border border-[#d4af37]/30 text-[#d4af37] font-bold text-xs uppercase tracking-widest rounded hover:bg-[#d4af37] hover:text-black transition-colors"
-                     >
-                        Learn
-                     </button>
+                     <div className="flex gap-2">
+                       <button 
+                         onClick={() => {
+                            setActiveChannel('chat');
+                            handleCommand(undefined, `/learn ${course.title}`);
+                         }}
+                         className="px-4 py-2 bg-[#d4af37]/10 border border-[#d4af37]/30 text-[#d4af37] font-bold text-xs uppercase tracking-widest rounded hover:bg-[#d4af37] hover:text-black transition-colors"
+                       >
+                          Learn
+                       </button>
+                       {wallet && wallet.profile.role !== 'Initiate' && (
+                         <button 
+                           onClick={() => {
+                              setActiveChannel('chat');
+                              handleCommand(undefined, `/teach ${course.title}`);
+                           }}
+                           className="px-4 py-2 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-bold text-xs uppercase tracking-widest rounded hover:bg-emerald-500 hover:text-black transition-colors"
+                         >
+                            Teach
+                         </button>
+                       )}
+                     </div>
                    </div>
                  </div>
                ))}
