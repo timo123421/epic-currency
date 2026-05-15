@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Hash, Zap, BookOpen, GraduationCap, Shield, Server, Coins, Cpu, CheckCircle2, Terminal, Send, Lock, Eye, Network, Menu, Users, X, ChevronRight } from 'lucide-react';
+import { Hash, Zap, BookOpen, GraduationCap, Shield, Server, Coins, Cpu, CheckCircle2, Terminal, Send, Lock, Eye, Network, Menu, Users, X, ChevronRight, MessageSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
 import ReactMarkdown from 'react-markdown';
+import { ArchangelVault } from './components/ArchangelVault';
 
 type Message = {
   id: string;
@@ -13,7 +14,7 @@ type Message = {
   historyData?: any[];
 };
 
-type Wallet = {
+export type Wallet = {
   algorithm: string;
   address: string;
   publicKeyFull: string;
@@ -111,7 +112,8 @@ export default function App() {
   const [commandInput, setCommandInput] = useState('');
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [isTyping, setIsTyping] = useState(false);
-  const [activeChannel, setActiveChannel] = useState<'chat' | 'courses' | 'ledger'>('chat');
+  const [activeChannel, setActiveChannel] = useState<string>('chat');
+  const [apiChatMessages, setApiChatMessages] = useState<any[]>([]);
   const [catalog, setCatalog] = useState<{title: string, cost: number}[]>([]);
   const [onlineUsers, setOnlineUsers] = useState<any[]>([]);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -184,11 +186,25 @@ export default function App() {
       } catch {}
     };
 
+    const loadApiChatMessages = async (token: string) => {
+        try {
+          const res = await fetch('/api/chat/messages', { headers: { 'Authorization': `Bearer ${token}` }});
+          if (res.ok) {
+            const data = await res.json();
+            setApiChatMessages(data.messages);
+          }
+        } catch {}
+    };
+
     const interval = setInterval(() => {
        fetchUsers();
        if (currentWalletAddress) {
          updateBalance(currentWalletAddress);
          checkIncomingTransfers(currentWalletAddress);
+         try {
+           const token = JSON.parse(localStorage.getItem('cyberheaven_wallet')!).token;
+           if (token) loadApiChatMessages(token);
+         } catch(e){}
        } else {
          const updatedWalletStr = localStorage.getItem('cyberheaven_wallet');
          if (updatedWalletStr) {
@@ -196,6 +212,8 @@ export default function App() {
              currentWalletAddress = JSON.parse(updatedWalletStr).address;
              updateBalance(currentWalletAddress);
              checkIncomingTransfers(currentWalletAddress);
+             const token = JSON.parse(updatedWalletStr).token;
+             if (token) loadApiChatMessages(token);
            } catch(e) {}
          }
        }
@@ -215,9 +233,30 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  const visibleMessages = [
+    ...messages.filter(m => activeChannel === 'chat'),
+    ...apiChatMessages.filter(m => {
+      if (activeChannel === 'chat') return m.recipientAddress === 'global';
+      if (activeChannel.startsWith('dm-')) {
+        const partner = activeChannel.replace('dm-', '');
+        return (m.senderAddress === partner && m.recipientAddress === wallet?.address) || 
+               (m.recipientAddress === partner && m.senderAddress === wallet?.address);
+      }
+      return false;
+    }).map(m => ({
+      ...m,
+      sender: m.senderAddress === wallet?.address ? 'user' : 'peer',
+      username: m.senderUsername,
+      timestamp: new Date(m.timestamp),
+      type: 'text'
+    }))
+  ].sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+  const dmPeers = Array.from(new Set(apiChatMessages.filter((m: any) => m.recipientAddress !== 'global').flatMap((m: any) => [m.senderAddress, m.recipientAddress]).filter((a: any) => a !== wallet?.address)));
+
   useEffect(() => {
     scrollToBottom();
-  }, [messages, isTyping]);
+  }, [visibleMessages, isTyping]);
 
   const addMessage = (sender: 'user' | 'archangel' | 'system', text: string, type: 'text' | 'history' = 'text', historyData?: any[]) => {
     setMessages(prev => [...prev, { id: Math.random().toString(36).substring(7), sender, text, timestamp: new Date(), type, historyData }]);
@@ -454,8 +493,32 @@ export default function App() {
            }
            addMessage('archangel', helpText);
         }
-        else {
+        else if (cmd.startsWith('/')) {
            addMessage('archangel', `Unknown command. Type \`/help\` for the sacred rites.`);
+        }
+        else {
+           // It's a text message to the active channel
+           if (!wallet) throw new Error("You must be connected to speak.");
+           let targetAddress = 'global';
+           if (activeChannel.startsWith('dm-')) {
+             targetAddress = activeChannel.replace('dm-', '');
+           }
+           const res = await fetch('/api/chat/send', {
+             method: 'POST',
+             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${wallet.token}` },
+             body: JSON.stringify({ targetAddress, text: input })
+           });
+           const data = await res.json();
+           if (!res.ok) throw new Error(data.error);
+           // We will fetch the new messages in the next poll, but we can also immediately load them
+           const token = wallet.token;
+           if (token) {
+             const mRes = await fetch('/api/chat/messages', { headers: { 'Authorization': `Bearer ${token}` }});
+             if (mRes.ok) {
+               const mData = await mRes.json();
+               setApiChatMessages(mData.messages);
+             }
+           }
         }
       } catch (e: any) {
         addMessage('system', `ERROR: ${e.message}`);
@@ -506,9 +569,26 @@ export default function App() {
             </div>
           </div>
 
+          {dmPeers.length > 0 && (
+            <div>
+              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 px-2 mb-2">Direct Messages</div>
+              <div className="space-y-0.5">
+                {dmPeers.map((peerAddr: string) => {
+                   const u = onlineUsers.find(ou => ou.address === peerAddr) || { username: peerAddr.substring(0, 8) };
+                   return (
+                     <ChannelItem key={peerAddr} icon={<MessageSquare />} label={u.username} active={activeChannel === `dm-${peerAddr}`} onClick={() => setActiveChannel(`dm-${peerAddr}`)} />
+                   )
+                })}
+              </div>
+            </div>
+          )}
+
           <div>
             <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 px-2 mb-2">Systems</div>
             <div className="space-y-0.5">
+              {wallet?.profile.role === 'Archangel' && (
+                <ChannelItem icon={<Shield />} label="archangel-vault" active={activeChannel === 'vault'} onClick={() => setActiveChannel('vault')} />
+              )}
               <ChannelItem icon={<Shield />} label="pqc-validators" onClick={() => { setActiveChannel('chat'); handleCommand(undefined, '/balance'); }} />
               <ChannelItem icon={<Cpu />} label="l2-zkp-compression" onClick={() => { setActiveChannel('chat'); handleCommand(undefined, '/network'); }} />
               <ChannelItem icon={<Server />} label="l3-dag-consensus" onClick={() => { setActiveChannel('chat'); handleCommand(undefined, '/network'); }} />
@@ -539,8 +619,18 @@ export default function App() {
           </button>
           <Hash className="w-6 h-6 text-[#d4af37]/70 hidden md:block" />
           <div className="flex-1 min-w-0">
-            <div className="font-bold text-white tracking-wide truncate">{activeChannel === 'chat' ? 'general-chat' : 'courses-board'}</div>
-            <div className="text-[10px] text-slate-400 font-mono uppercase tracking-widest truncate">{activeChannel === 'chat' ? 'Execute commands via CLI' : 'Enroll in syllabuses. Expand your node.'}</div>
+            <div className="font-bold text-white tracking-wide truncate">
+              {activeChannel === 'chat' && 'general-chat'}
+              {activeChannel === 'courses' && 'courses-board'}
+              {activeChannel === 'vault' && 'archangel-vault'}
+              {activeChannel.startsWith('dm-') && `direct-message-${(onlineUsers.find(u => u.address === activeChannel.replace('dm-', '')) || {}).username || activeChannel.replace('dm-', '').substring(0,6)}`}
+            </div>
+            <div className="text-[10px] text-slate-400 font-mono uppercase tracking-widest truncate">
+              {activeChannel === 'chat' && 'Execute commands via CLI'}
+              {activeChannel === 'courses' && 'Enroll in syllabuses. Expand your node.'}
+              {activeChannel === 'vault' && 'Administer the network'}
+              {activeChannel.startsWith('dm-') && 'Encrypted P2P Communication Channel'}
+            </div>
           </div>
           <button className="md:hidden text-slate-400 hover:text-white ml-auto" onClick={() => setIsMembersOpen(!isMembersOpen)}>
              <Users className="w-6 h-6" />
@@ -548,11 +638,11 @@ export default function App() {
         </header>
 
         <div className="flex-1 h-full overflow-hidden flex flex-col">
-        {activeChannel === 'chat' && (
+        {(activeChannel === 'chat' || activeChannel.startsWith('dm-')) && (
           <>
             <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
               <AnimatePresence initial={false}>
-                {messages.map((m) => (
+                {visibleMessages.map((m: any) => (
                   <motion.div 
                     key={m.id}
                     initial={{ opacity: 0, y: 10 }}
@@ -565,9 +655,10 @@ export default function App() {
                     {m.sender !== 'system' && (
                       <div className={cn(
                         "w-10 h-10 rounded-full flex items-center justify-center shrink-0 border mt-1",
-                        m.sender === 'archangel' ? "bg-black border-[#d4af37]/50 gold-glow" : "bg-cyan-950 border-cyan-500/50"
+                        m.sender === 'archangel' ? "bg-black border-[#d4af37]/50 gold-glow" : 
+                        m.sender === 'peer' ? "bg-[#0a0f1a] border-purple-500/50" : "bg-cyan-950 border-cyan-500/50"
                       )}>
-                        {m.sender === 'archangel' ? <GraduationCap className="w-5 h-5 text-[#d4af37]" /> : <Terminal className="w-5 h-5 text-cyan-400" />}
+                        {m.sender === 'archangel' ? <GraduationCap className="w-5 h-5 text-[#d4af37]" /> : <Terminal className={cn("w-5 h-5", m.sender==='peer' ? "text-purple-400" : "text-cyan-400")} />}
                       </div>
                     )}
                     
@@ -576,9 +667,11 @@ export default function App() {
                          <div className="flex items-baseline gap-2 mb-1">
                             <span className={cn(
                               "font-bold text-sm",
-                              m.sender === 'archangel' ? "text-[#d4af37]" : "text-cyan-400"
+                              m.sender === 'archangel' ? "text-[#d4af37]" : 
+                              m.sender === 'peer' ? "text-purple-400" : "text-cyan-400"
                             )}>
-                              {m.sender === 'archangel' ? 'Archangel Bot' : 'You'}
+                              {m.sender === 'archangel' ? 'Archangel Bot' : 
+                               m.sender === 'peer' ? (m.username || 'Agent') : 'You'}
                             </span>
                             {m.sender === 'archangel' && (
                               <span className="text-[9px] bg-[#d4af37]/20 text-[#d4af37] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Verified App</span>
@@ -636,7 +729,7 @@ export default function App() {
                   type="text" 
                   value={commandInput}
                   onChange={(e) => setCommandInput(e.target.value)}
-                  placeholder={wallet?.profile.role === 'Initiate' ? "Message #general-chat (/study, /balance, /help)..." : "Message #general-chat (/teach, /balance, /help)..."}
+                  placeholder={activeChannel === 'chat' ? (wallet?.profile.role === 'Initiate' ? "Message #general-chat (/study, /balance, /help)..." : "Message #general-chat (/teach, /balance, /help)...") : "Send Direct Message..."}
                   className="w-full bg-transparent text-slate-200 p-4 outline-none font-sans text-base md:text-sm"
                   disabled={isTyping}
                 />
@@ -701,6 +794,7 @@ export default function App() {
              </div>
           </div>
         )}
+        {activeChannel === 'vault' && <ArchangelVault wallet={wallet} />}
         </div>
       </div>
 
@@ -771,23 +865,56 @@ export default function App() {
                     {onlineUsers.map((u, i) => (
                       <div 
                         key={i} 
-                        onClick={() => {
-                          setCommandInput(`/send 50 ${u.address}`);
-                          if (isMembersOpen) setIsMembersOpen(false);
-                          setActiveChannel('chat');
-                        }}
-                        className="flex items-center gap-3 p-2 bg-black/20 rounded hover:bg-white/5 transition-colors cursor-pointer group"
+                        className="flex items-center gap-3 p-2 bg-black/20 rounded hover:bg-white/5 transition-colors group"
                       >
-                        <div className="w-8 h-8 rounded-full bg-[#0a0f1a] border border-cyan-500/30 flex items-center justify-center shrink-0">
+                        <div 
+                          className="w-8 h-8 rounded-full bg-[#0a0f1a] border border-cyan-500/30 flex items-center justify-center shrink-0 cursor-pointer"
+                          onClick={() => {
+                            if (u.address !== wallet?.address) {
+                              setActiveChannel(`dm-${u.address}`);
+                              if (isMembersOpen) setIsMembersOpen(false);
+                            }
+                          }}
+                        >
                            {u.role === 'Archangel' ? <Shield className="w-4 h-4 text-[#d4af37]" /> : <Terminal className="w-4 h-4 text-cyan-500" />}
                         </div>
-                        <div className="flex-1 min-w-0">
+                        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => {
+                            if (u.address !== wallet?.address) {
+                              setActiveChannel(`dm-${u.address}`);
+                              if (isMembersOpen) setIsMembersOpen(false);
+                            }
+                          }}>
                            <div className={cn("text-xs font-bold truncate", u.role === 'Archangel' ? "text-[#d4af37]" : "text-white")}>{u.username}</div>
                            <div className="text-[9px] text-slate-500 font-mono flex items-center gap-1">
                              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> {u.role}
                            </div>
                         </div>
-                        <div className="text-[8px] opacity-0 group-hover:opacity-100 font-mono text-cyan-500 transition-opacity">SEND TX &rarr;</div>
+                        
+                        {u.address !== wallet?.address && (
+                          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button 
+                              onClick={() => {
+                                setCommandInput(`/send 50 ${u.address}`);
+                                setActiveChannel('chat');
+                                if (isMembersOpen) setIsMembersOpen(false);
+                              }}
+                              className="text-[9px] px-1.5 py-1 bg-black/50 hover:bg-cyan-900/50 text-cyan-500 border border-cyan-900/50 rounded transition-colors"
+                              title="Send CHT"
+                            >
+                              TX
+                            </button>
+                            <button 
+                              onClick={() => {
+                                setActiveChannel(`dm-${u.address}`);
+                                if (isMembersOpen) setIsMembersOpen(false);
+                              }}
+                              className="text-[9px] px-1.5 py-1 bg-black/50 hover:bg-purple-900/50 text-purple-400 border border-purple-900/50 rounded transition-colors"
+                              title="Direct Message"
+                            >
+                              DM
+                            </button>
+                          </div>
+                        )}
                       </div>
                     ))}
                  </div>

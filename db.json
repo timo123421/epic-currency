@@ -1,0 +1,60 @@
+{
+  "users": {
+    "pqc_89f8fecc5477fe34f609dfd0fdacd1e0b80b9b5d": {
+      "address": "pqc_89f8fecc5477fe34f609dfd0fdacd1e0b80b9b5d",
+      "username": "TesterArch0.058361037903998936",
+      "role": "Initiate",
+      "hashedPassword": "$argon2id$v=19$m=65536,t=3,p=4$icBXoLgDgYV87u3C3UUkGA$1rrZ9tOJroJfyjblArN3PRsXiFP0dK+dxttWe+SG/T4",
+      "sessionToken": "4a69031561856007d1f55d197727d8c641bbe1fb918bf875e70e7461aba27fc0",
+      "joinedAt": 1778874806218
+    },
+    "pqc_a55485d9840a81853e08e4a4239d267f3aee9dac": {
+      "address": "pqc_a55485d9840a81853e08e4a4239d267f3aee9dac",
+      "username": "TesterArch0.6699762114668264",
+      "role": "Initiate",
+      "hashedPassword": "$argon2id$v=19$m=65536,t=3,p=4$njtxBI6DVeBjoXvOV42qmw$IjC/aiZ+tULPv+470LNFp6M5u0rckX5PGvZsLsFXAVY",
+      "sessionToken": "7da5de4a0e0f1f5ce7e9062cb0964379c8f8c9af916aa4f3dec7b495ff247b95",
+      "joinedAt": 1778874823966
+    },
+    "pqc_7e42ee5a879c5d3ab29743226475d7203bed5080": {
+      "address": "pqc_7e42ee5a879c5d3ab29743226475d7203bed5080",
+      "username": "TesterInit0.6699762114668264",
+      "role": "Initiate",
+      "hashedPassword": "$argon2id$v=19$m=65536,t=3,p=4$daGPIPIS644z+Bwehdcepg$AZID+DYK+72cbDMTbJoDVeyUcyeARgeOJfmPPOPw/EM",
+      "sessionToken": "7a62187e109b805d19fd7d624e3bfadc4382ebf5e42b81e7036460c1cb622a74",
+      "joinedAt": 1778874824288
+    },
+    "pqc_c7fb88dd50a761b3bd96768fab1e4f763346b910": {
+      "address": "pqc_c7fb88dd50a761b3bd96768fab1e4f763346b910",
+      "username": "TesterArch0.3787833519293724",
+      "role": "Archangel",
+      "hashedPassword": "$argon2id$v=19$m=65536,t=3,p=4$TbcDeIgnmj4tfdbuJN1nfA$6tbRYYaYgfTNOvYl5S2gFnGtW0b6/BMHQExppkrMtTU",
+      "sessionToken": "d069f3198a7a8c4038ce07fdc6128c7c134f9fff8098c9a9c594c84989a30b35",
+      "joinedAt": 1778874840773
+    },
+    "pqc_694c2eb9bb63915952476eebd6716ddf4620c6fb": {
+      "address": "pqc_694c2eb9bb63915952476eebd6716ddf4620c6fb",
+      "username": "TesterInit0.3787833519293724",
+      "role": "Initiate",
+      "hashedPassword": "$argon2id$v=19$m=65536,t=3,p=4$nMYQ1jEZDqjCIaPSoQMfgg$hiyrbpe1c3i+K8eINooT+Up785tokwDB3j9NN6GCRgI",
+      "sessionToken": "a4d6201c2ae8ddaf16f0149dfad0bd6901e12a4668fbf98d6b83f8d28ffc724f",
+      "joinedAt": 1778874841078
+    }
+  },
+  "ledger": {
+    "pqc_89f8fecc5477fe34f609dfd0fdacd1e0b80b9b5d": 0,
+    "pqc_a55485d9840a81853e08e4a4239d267f3aee9dac": 0,
+    "pqc_7e42ee5a879c5d3ab29743226475d7203bed5080": 0,
+    "pqc_c7fb88dd50a761b3bd96768fab1e4f763346b910": 10000,
+    "pqc_694c2eb9bb63915952476eebd6716ddf4620c6fb": 105
+  },
+  "auditLogs": [
+    {
+      "timestamp": 1778874841083,
+      "adminAddress": "pqc_c7fb88dd50a761b3bd96768fab1e4f763346b910",
+      "action": "ADJUST_BALANCE",
+      "targetAddress": "pqc_694c2eb9bb63915952476eebd6716ddf4620c6fb",
+      "details": "+100 CHT"
+    }
+  ]
+}

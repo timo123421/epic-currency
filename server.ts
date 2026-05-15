@@ -6,6 +6,14 @@ import fs from "fs";
 import argon2 from "argon2";
 import helmet from "helmet";
 
+declare global {
+  namespace Express {
+    interface Request {
+      user?: any;
+    }
+  }
+}
+
 // Exact NIST PQC Standards (Sizes in Bytes)
 const ALGORITHMS = {
   "ML-DSA-44": { pk: 1312, sk: 2560, sig: 2420 },
@@ -42,6 +50,25 @@ const mempool: Transaction[] = [];
 const confirmedTx: Transaction[] = [];
 let currentBlockHeight = 14882901;
 
+interface AuditLog {
+  timestamp: number;
+  adminAddress: string;
+  action: string;
+  targetAddress: string;
+  details: string;
+}
+const auditLogs: AuditLog[] = [];
+
+interface ChatMessage {
+  id: string;
+  senderAddress: string;
+  senderUsername: string;
+  recipientAddress: string | 'global';
+  text: string;
+  timestamp: number;
+}
+const chatMessages: ChatMessage[] = [];
+
 // Persistent DB
 const DB_PATH = path.join(process.cwd(), "db.json");
 
@@ -60,6 +87,12 @@ function loadDb() {
           ledger.set(addr, bal as number);
         });
       }
+      if (db.auditLogs) {
+        db.auditLogs.forEach((log: AuditLog) => auditLogs.push(log));
+      }
+      if (db.chatMessages) {
+        db.chatMessages.forEach((msg: ChatMessage) => chatMessages.push(msg));
+      }
     } catch (e) {
       console.error("Failed to load DB", e);
     }
@@ -73,7 +106,7 @@ function saveDb() {
   ledger.forEach((val, key) => (ledgerObj[key] = val));
   fs.writeFileSync(
     DB_PATH,
-    JSON.stringify({ users: usersObj, ledger: ledgerObj }, null, 2)
+    JSON.stringify({ users: usersObj, ledger: ledgerObj, auditLogs, chatMessages }, null, 2)
   );
 }
 
@@ -91,6 +124,13 @@ function requireAuth(req: any, res: any, next: any) {
     return res.status(401).json({ error: "Invalid or expired session. Please reconnect." });
   }
   req.user = user;
+  next();
+}
+
+function requireArchangel(req: any, res: any, next: any) {
+  if (req.user.role !== 'Archangel') {
+    return res.status(403).json({ error: "Access Denied. Archangel rank required." });
+  }
   next();
 }
 
@@ -127,6 +167,63 @@ async function startServer() {
   app.use(express.json({ limit: "50kb" }));
 
   // === LAYER 1: QUANTUM-SAFE CRYPTOGRAPHY & IDENTITY ===
+  app.post("/api/admin/users", requireAuth, requireArchangel, (req, res) => {
+    const allUsers = Array.from(users.values()).map(u => ({
+      address: u.address,
+      username: u.username,
+      role: u.role,
+      joinedAt: u.joinedAt,
+      balance: ledger.get(u.address) || 0
+    }));
+    res.json({ users: allUsers });
+  });
+
+  app.post("/api/admin/adjust_balance", requireAuth, requireArchangel, rateLimit, (req, res) => {
+    const { targetAddress, amountOffset } = req.body;
+    if (!targetAddress || typeof amountOffset !== 'number') {
+      return res.status(400).json({ error: "Missing target address or invalid amount." });
+    }
+    const currentBal = ledger.get(targetAddress) || 0;
+    const newBal = Math.max(0, currentBal + amountOffset);
+    ledger.set(targetAddress, newBal);
+    
+    auditLogs.push({
+      timestamp: Date.now(),
+      adminAddress: req.user.address,
+      action: "ADJUST_BALANCE",
+      targetAddress,
+      details: `${amountOffset > 0 ? '+' : ''}${amountOffset} CHT`
+    });
+    saveDb();
+
+    res.json({ success: true, message: `Adjusted balance for ${targetAddress}. New Balance: ${newBal}` });
+  });
+
+  app.post("/api/admin/assign_role", requireAuth, requireArchangel, rateLimit, (req, res) => {
+    const { targetAddress, newRole } = req.body;
+    if (!targetAddress || !newRole || !['Initiate', 'Scholar', 'Archangel'].includes(newRole)) {
+      return res.status(400).json({ error: "Invalid role or missing target." });
+    }
+    const userTarget = users.get(targetAddress);
+    if (!userTarget) return res.status(404).json({ error: "User not found." });
+    
+    userTarget.role = newRole;
+    auditLogs.push({
+      timestamp: Date.now(),
+      adminAddress: req.user.address,
+      action: "ASSIGN_ROLE",
+      targetAddress,
+      details: `Role changed to ${newRole}`
+    });
+    saveDb();
+
+    res.json({ success: true, message: `Role updated for ${userTarget.username} to ${newRole}.` });
+  });
+
+  app.get("/api/admin/audit_logs", requireAuth, requireArchangel, (req, res) => {
+    res.json({ logs: auditLogs });
+  });
+
   app.post("/api/auth/register", async (req, res) => {
     const alg = req.body.algorithm || "ML-DSA-44";
     const username = req.body.username;
@@ -533,6 +630,47 @@ async function startServer() {
       tps: Math.floor(40000 + Math.random() * 10000), // ~40k-50k TPS simulation based on Layer 2 scaling
       processedTransactions: processedTx
     });
+  });
+
+  // === LAYER 4: COMMUNICATION (DM & GLOBAL) ===
+  app.post("/api/chat/send", requireAuth, rateLimit, (req, res) => {
+    const { targetAddress, text } = req.body;
+    if (!text || typeof text !== 'string') {
+      return res.status(400).json({ error: "Message text is required." });
+    }
+    
+    // allow 'global' or a real user address
+    if (targetAddress !== 'global' && !users.has(targetAddress)) {
+      return res.status(404).json({ error: "Target identity not found." });
+    }
+
+    const newMessage: ChatMessage = {
+      id: crypto.randomBytes(16).toString('hex'),
+      senderAddress: req.user.address,
+      senderUsername: req.user.username,
+      recipientAddress: targetAddress,
+      text: text.slice(0, 500), // restrict length
+      timestamp: Date.now()
+    };
+
+    chatMessages.push(newMessage);
+    saveDb();
+
+    res.json({ success: true, message: newMessage });
+  });
+
+  app.get("/api/chat/messages", requireAuth, (req, res) => {
+    const callerAddress = req.user.address;
+    
+    // Return all global messages AND messages where the user is sender or recipient
+    const visibleMessages = chatMessages.filter(msg => {
+      if (msg.recipientAddress === 'global') return true;
+      if (msg.senderAddress === callerAddress) return true;
+      if (msg.recipientAddress === callerAddress) return true;
+      return false;
+    });
+
+    res.json({ messages: visibleMessages });
   });
 
   // Vite middleware for development
