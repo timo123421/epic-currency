@@ -5,6 +5,9 @@ import { createServer as createViteServer } from "vite";
 import fs from "fs";
 import argon2 from "argon2";
 import helmet from "helmet";
+import jwt from "jsonwebtoken";
+
+const JWT_SECRET = process.env.JWT_SECRET || "SUPER_SECRET_KEY_CYBERHEAVEN_PROTO_7";
 
 declare global {
   namespace Express {
@@ -119,12 +122,31 @@ function requireAuth(req: any, res: any, next: any) {
     return res.status(401).json({ error: "Missing authorization. Please reconnect." });
   }
   const token = authHeader.split(' ')[1];
-  const user = Array.from(users.values()).find(u => u.sessionToken === token);
-  if (!user) {
+  
+  try {
+    const payload = jwt.verify(token, JWT_SECRET) as any;
+    let user = users.get(payload.address);
+    if (!user) {
+      // Recreate user memory state if server restarted
+      user = {
+        address: payload.address,
+        username: payload.username,
+        role: payload.role,
+        hashedPassword: "UNKNOWN_JWT_RECOVERED",
+        sessionToken: token,
+        joinedAt: payload.joinedAt || Date.now()
+      };
+      users.set(payload.address, user);
+      if (!ledger.has(payload.address)) {
+        ledger.set(payload.address, user.role === 'Archangel' ? 10000 : user.role === 'Scholar' ? 500 : 0);
+      }
+      saveDb();
+    }
+    req.user = user;
+    next();
+  } catch (err) {
     return res.status(401).json({ error: "Invalid or expired session. Please reconnect." });
   }
-  req.user = user;
-  next();
 }
 
 function requireArchangel(req: any, res: any, next: any) {
@@ -246,7 +268,6 @@ async function startServer() {
     }
 
     const hashedPassword = await argon2.hash(userPassword);
-    const sessionToken = crypto.randomBytes(32).toString('hex');
     const specs = ALGORITHMS[alg as keyof typeof ALGORITHMS] || ALGORITHMS["ML-DSA-44"];
     
     const privateKey = crypto.randomBytes(specs.sk).toString('hex');
@@ -254,6 +275,12 @@ async function startServer() {
     
     const hash = crypto.createHash('sha3-256').update(publicKey).digest('hex');
     const address = "pqc_" + hash.substring(0, 40);
+
+    const sessionToken = jwt.sign(
+      { address, username, role, joinedAt: Date.now() },
+      JWT_SECRET,
+      { expiresIn: "30d" }
+    );
 
     if (!ledger.has(address)) {
       ledger.set(address, role === 'Archangel' ? 10000 : role === 'Scholar' ? 500 : 0);
@@ -306,7 +333,11 @@ async function startServer() {
       return res.status(403).json({ error: "Invalid credentials." });
     }
 
-    const sessionToken = crypto.randomBytes(32).toString('hex');
+    const sessionToken = jwt.sign(
+      { address: userEntry.address, username: userEntry.username, role: userEntry.role, joinedAt: userEntry.joinedAt },
+      JWT_SECRET,
+      { expiresIn: "30d" }
+    );
     userEntry.sessionToken = sessionToken;
     saveDb();
 
