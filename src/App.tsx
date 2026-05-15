@@ -63,8 +63,31 @@ export default function App() {
       .then(data => setCatalog(data.courses))
       .catch(console.error);
 
+    const savedWalletStr = localStorage.getItem('cyberheaven_wallet');
+    if (savedWalletStr) {
+      try {
+         const savedWallet = JSON.parse(savedWalletStr);
+         fetch('/api/auth/restore', {
+           method: 'POST',
+           headers: { 'Content-Type': 'application/json' },
+           body: JSON.stringify({ wallet: savedWallet })
+         }).then(res => {
+           if(res.ok) {
+             setWallet(savedWallet);
+             setShowGate(false);
+             addMessage('system', "Quantum session tether re-established from local storage.");
+             fetchUsers();
+           } else {
+             localStorage.removeItem('cyberheaven_wallet');
+           }
+         });
+      } catch(e) {
+         localStorage.removeItem('cyberheaven_wallet');
+      }
+    }
+
     const interval = setInterval(() => {
-       if (wallet) fetchUsers();
+       fetchUsers();
     }, 10000);
     return () => clearInterval(interval);
   }, []);
@@ -110,7 +133,7 @@ export default function App() {
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || data.message);
       
-      setWallet({
+      const walletData = {
         algorithm: data.algorithm,
         address: data.address,
         publicKeyFull: data.publicKeyFull,
@@ -119,7 +142,10 @@ export default function App() {
         privateKeySize: data.privateKeySizeInBytes,
         balance: data.balance,
         profile: data.profile
-      });
+      };
+      
+      setWallet(walletData);
+      localStorage.setItem('cyberheaven_wallet', JSON.stringify(walletData));
       
       setShowGate(false);
       fetchUsers();
@@ -154,6 +180,19 @@ export default function App() {
              method: 'POST',
              headers: { 'Content-Type': 'application/json' },
              body: JSON.stringify({ address: wallet.address, course })
+           });
+           const data = await res.json();
+           if(!res.ok) throw new Error(data.error);
+  
+           addMessage('archangel', data.message);
+           await updateBalance(wallet.address);
+        }
+        else if (cmd === '/study') {
+           if (!wallet) throw new Error("You must be connected first.");
+           const res = await fetch('/api/university/study', {
+             method: 'POST',
+             headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify({ address: wallet.address })
            });
            const data = await res.json();
            if(!res.ok) throw new Error(data.error);
@@ -250,7 +289,7 @@ export default function App() {
            }
         }
          else if (cmd === '/help') {
-           addMessage('archangel', `Available incantations:\n\n- \`/teach <course>\` : Impart wisdom, earn CHT (added to Mempool)\n- \`/learn <course>\` : Spend CHT to gain knowledge\n- \`/send <amount> <address>\` : Transfer CHT in mempool\n- \`/balance\` : Check confirmed holdings\n- \`/history\` : View your temporal essence ledger\n- \`/network\` : Trigger Layer 2 Compress + Layer 3 Consensus`);
+           addMessage('archangel', `Available incantations:\n\n- \`/study\` : Diligently study in the archives to discover CHT (Initiates)\n- \`/teach <course>\` : Impart wisdom, earn CHT (added to Mempool)\n- \`/learn <course>\` : Spend CHT to gain knowledge\n- \`/send <amount> <address>\` : Transfer CHT in mempool\n- \`/balance\` : Check confirmed holdings\n- \`/history\` : View your temporal essence ledger\n- \`/network\` : Trigger Layer 2 Compress + Layer 3 Consensus`);
         }
         else {
            addMessage('archangel', `Unknown command. Type \`/help\` for the sacred rites.`);
@@ -264,13 +303,15 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen bg-[#06080E] text-slate-300 font-sans selection:bg-cyan-900/50 relative overflow-hidden">
-      
+    <div className="flex bg-[#020203] items-center justify-center min-h-screen w-full sm:p-4 md:p-8 relative overflow-hidden">
       {/* Background Ambience */}
       <div className="absolute inset-0 cyberheaven-grid opacity-30 pointer-events-none"></div>
       <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-[#d4af37]/5 rounded-full blur-[150px] mix-blend-screen pointer-events-none" />
       <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-cyan-900/10 rounded-full blur-[150px] mix-blend-screen pointer-events-none" />
 
+      {/* Main App Window */}
+      <div className="w-full max-w-screen-2xl h-[100vh] sm:h-[calc(100vh-2rem)] md:h-[calc(100vh-4rem)] max-h-[1000px] bg-[#06080E] text-slate-300 font-sans selection:bg-cyan-900/50 relative overflow-hidden flex sm:rounded-2xl sm:border sm:border-[#ffffff1a] shadow-2xl z-10">
+        
       {/* Guild Server Bar (Extreme Left) */}
       <div className={cn(
         "w-16 shrink-0 bg-[#030408]/80 backdrop-blur-md border-r border-[#ffffff0a] flex flex-col items-center py-4 z-20 absolute md:relative h-full transition-transform duration-300",
@@ -517,12 +558,21 @@ export default function App() {
 
           {wallet ? (
             <div className="space-y-4">
-              <div className="text-xs font-bold uppercase tracking-widest text-slate-500 border-b border-[#ffffff0a] pb-2 flex justify-between items-center">
-                <span>Cryptography specs</span>
-                <button className="text-[9px] text-cyan-400 cursor-pointer hover:bg-cyan-900/30 border border-cyan-400/30 px-1.5 py-0.5 rounded bg-cyan-900/10 transition-colors" onClick={() => {
-                   handleCommand(undefined, '/history');
-                   if (isMembersOpen) setIsMembersOpen(false);
-                }}>History 📜</button>
+              <div className="text-xs font-bold uppercase tracking-widest text-slate-500 flex flex-col gap-2 border-b border-[#ffffff0a] pb-2">
+                <span>Node Profile Overview</span>
+                <div className="flex items-center gap-2">
+                  <button className="text-[9px] text-cyan-400 cursor-pointer hover:bg-cyan-900/30 border border-cyan-400/30 px-1.5 py-0.5 rounded bg-cyan-900/10 transition-colors" onClick={() => {
+                     handleCommand(undefined, '/history');
+                     if (isMembersOpen) setIsMembersOpen(false);
+                  }}>History 📜</button>
+                  <button className="text-[9px] text-red-400 cursor-pointer hover:bg-red-900/30 border border-red-400/30 px-1.5 py-0.5 rounded bg-red-900/10 transition-colors" onClick={() => {
+                     localStorage.removeItem('cyberheaven_wallet');
+                     setWallet(null);
+                     setShowGate(true);
+                     if (isMembersOpen) setIsMembersOpen(false);
+                     addMessage('system', "Quantum session severed. Identity removed from local node.");
+                  }}>Sever Link 🔌</button>
+                </div>
               </div>
               
               <div className="space-y-1">
@@ -575,8 +625,8 @@ export default function App() {
       </div>
 
       {showGate && (
-        <div className="absolute inset-0 z-[100] bg-[#06080E]/90 backdrop-blur-md flex items-center justify-center p-4">
-           <div className="max-w-md w-full bg-black/80 border border-[#d4af37]/40 rounded-2xl p-8 shadow-2xl gold-glow relative overflow-hidden">
+        <div className="fixed inset-0 z-[100] bg-[#06080E]/95 backdrop-blur-md overflow-y-auto flex items-center justify-center p-4 sm:p-8">
+           <div className="max-w-md w-full bg-black/90 border border-[#d4af37]/40 rounded-2xl p-8 shadow-2xl gold-glow relative overflow-hidden my-8">
              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-cyan-500 via-[#d4af37] to-cyan-500"></div>
              
              <div className="flex justify-center mb-6">
@@ -651,6 +701,7 @@ export default function App() {
            </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

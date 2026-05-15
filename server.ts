@@ -89,6 +89,22 @@ async function startServer() {
     });
   });
 
+  app.post("/api/auth/restore", (req, res) => {
+    const { wallet } = req.body;
+    if (!wallet || !wallet.address || !wallet.profile) {
+       return res.status(400).json({ error: "Invalid session" });
+    }
+    
+    if (!users.has(wallet.address)) {
+      users.set(wallet.address, wallet.profile);
+    }
+    if (!ledger.has(wallet.address)) {
+      ledger.set(wallet.address, wallet.balance || 0); 
+    }
+    
+    res.json({ success: true, message: "Session verified." });
+  });
+
   app.get("/api/users", (req, res) => {
     res.json({ users: Array.from(users.values()) });
   });
@@ -199,6 +215,39 @@ async function startServer() {
         title,
         cost: COURSE_COSTS[title]
       }))
+    });
+  });
+
+  app.post("/api/university/study", (req, res) => {
+    const { address } = req.body;
+    if (!address) return res.status(400).json({ error: "Missing address" });
+    
+    const user = users.get(address);
+    if (!user) return res.status(403).json({ error: "Identity not found. Register first." });
+    
+    // Reward mathematically for studying
+    const rewardAmount = Math.floor(Math.random() * 10) + 5; // 5 to 14 CHT
+    const currentBal = ledger.get(address) || 0;
+    ledger.set(address, currentBal + rewardAmount);
+    
+    // Simulate transaction from university
+    const signatureRaw = crypto.randomBytes(2420).toString('hex');
+    const tx: Transaction = {
+      id: crypto.createHash('sha3-256').update(Date.now().toString() + "study").digest('hex'),
+      sender: "CYBERHEAVEN_UNIVERSITY_TREASURY",
+      recipient: address,
+      amount: rewardAmount,
+      pubKey: "CYBERHEAVEN_MASTER_QPK",
+      signature: "pqc_sig_" + signatureRaw.substring(0, 500),
+      algorithm: "ML-DSA-65",
+      timestamp: Date.now()
+    };
+    mempool.push(tx);
+
+    res.json({
+      amount: rewardAmount,
+      txId: tx.id,
+      message: `Through diligent studying in the lower archives, you discovered a fragment of knowledge worth ${rewardAmount} CHT. The transaction is queued in the Layer 1 Mempool.`
     });
   });
 
